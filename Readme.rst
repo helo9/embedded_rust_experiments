@@ -1,5 +1,13 @@
 
 
+ARM/Raspberry Pico Setup
+------------------------
+
+.. code-block:: bash
+   
+   cargo install elf2uf2-rs
+   cargo install flip-link
+
 AVR/Arduino Setup
 -----------------
 
