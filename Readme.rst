@@ -3,10 +3,20 @@
 ARM/Raspberry Pico Setup
 ------------------------
 
+Dependencies:
+
 .. code-block:: bash
-   
+
    cargo install elf2uf2-rs
    cargo install flip-link
+   cargo install cargo-generate
+
+
+Project Setup
+
+.. code-block:: bash
+
+   cargo-generate gen -g https://github.com/rp-rs/rp2040-project-template.git
 
 AVR/Arduino Setup
 -----------------
