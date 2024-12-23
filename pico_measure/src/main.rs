@@ -1,46 +1,30 @@
-//! # Pico USB Serial Example
+//! # Pico Measure Experiment
 //!
-//! Creates a USB Serial device on a Pico board, with the USB driver running in
-//! the main thread.
-//!
-//! This will create a USB Serial device echoing anything it receives. Incoming
-//! ASCII characters are converted to upercase, so you can tell it is working
-//! and not just local-echo!
+//! Measure some voltages using the ADC at pins GP26_A0, GP27_A1 and GP28_A2
+//! and write the values out via usb serial.
 //!
 //! See the `Cargo.toml` file for Copyright and license details.
 
 #![no_std]
 #![no_main]
 
-// The macro for our start-up function
-use rp_pico::entry;
-
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
 use panic_halt as _;
 
-// A shorter alias for the Peripheral Access Crate, which provides low-level
-// register access
+use rp_pico::entry;
 use rp_pico::hal::pac;
-
-// A shorter alias for the Hardware Abstraction Layer, which provides
-// higher-level drivers.
 use rp_pico::hal;
 
-// USB Device support
-use usb_device::{class_prelude::*, prelude::*};
+use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
+use embedded_hal_0_2::timer::CountDown;
 
-// USB Communications Class Device support
+use fugit::ExtU32;
+
+// usb related
+use usb_device::{class_prelude::*, prelude::*};
 use usbd_serial::SerialPort;
 
+use pico_measure_transport::{Measurement, pack};
 
-/// Entry point to our bare-metal application.
-///
-/// The `#[entry]` macro ensures the Cortex-M start-up code calls this function
-/// as soon as all global variables are initialised.
-///
-/// The function configures the RP2040 peripherals, then echoes any characters
-/// received over USB Serial.
 #[entry]
 fn main() -> ! {
     // Grab our singleton objects
@@ -63,6 +47,9 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
+
+    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let mut count_down = timer.count_down();
 
     #[cfg(feature = "rp2040-e5")]
     {
@@ -97,8 +84,59 @@ fn main() -> ! {
         .device_class(2) // from: https://www.usb.org/defined-class-codes
         .build();
 
+    // Enable adc
+    let mut adc = hal::Adc::new(pac.ADC, &mut pac.RESETS);
+    // Enable the temperature sensor
+    let mut temperature_sensor = adc.take_temp_sensor().unwrap();
+
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
+
+    // Set the pins up according to their function on this particular board
+    let pins = rp_pico::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
+    
+    // Set the LED to be an output
+    let mut led_pin = pins.led.into_push_pull_output();
+
+    count_down.start(500.millis());
+
     loop {
 
+        if count_down.wait().is_ok() {
+            led_pin.toggle().unwrap();
+            let temperature_adc_counts: u16 = adc.read(&mut temperature_sensor).unwrap();
+
+            let measurment = Measurement {
+                millis: 0u32,
+                measurement: temperature_adc_counts,
+                sensor_id: 0u8,
+            };
+            
+            // Serialize the measurement to a compact binary format using Postcard
+            match pack(&measurment) {
+                Ok(serialized) => {
+                    // Send the serialized data over USB
+                    match serial.write(&serialized) {
+                        Ok(_) => {
+                            // Successfully sent the data
+                        }
+                        Err(_e) => {
+                            // Didn't work..
+                        }
+                    }
+                }
+                Err(_e) => {
+                    // Didn't work as well :(
+                }
+            }
+
+            count_down.start(500.millis());
+        }
 
         // Check for new data
         if usb_dev.poll(&mut [&mut serial]) {
@@ -129,6 +167,7 @@ fn main() -> ! {
                 }
             }
         }
+
     }
 }
 

@@ -1,0 +1,10 @@
+[package]
+name = "pico_measure_host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pico_measure_transport = { version = "0.1.0", path = "../pico_measure_transport" }
+postcard = "1.1.1"
+serde = "1.0.216"
+serialport = "4.6.1"
