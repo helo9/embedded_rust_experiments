@@ -11,11 +11,12 @@
 use panic_halt as _;
 
 use rp_pico::entry;
-use rp_pico::hal::pac;
 use rp_pico::hal;
+use rp_pico::hal::clocks::ClocksManager;
+use rp_pico::hal::{clocks, pac, usb};
 
-use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
 use embedded_hal_0_2::timer::CountDown;
+use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
 
 use fugit::ExtU32;
 
@@ -23,12 +24,13 @@ use fugit::ExtU32;
 use usb_device::{class_prelude::*, prelude::*};
 use usbd_serial::SerialPort;
 
-use pico_measure_transport::{Measurement, pack};
+use pico_measure_transport::{pack, Measurement, MeasurementUnit};
 
 #[entry]
 fn main() -> ! {
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
+    let mut core_peripherals = cortex_m::Peripherals::take().unwrap();
 
     // Set up the watchdog driver - needed by the clock setup code
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
@@ -48,21 +50,23 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
-    let mut count_down = timer.count_down();
+    setup_systick(&mut core_peripherals.SYST);
 
-    #[cfg(feature = "rp2040-e5")]
-    {
-        let sio = hal::Sio::new(pac.SIO);
-        let _pins = rp_pico::Pins::new(
-            pac.IO_BANK0,
-            pac.PADS_BANK0,
-            sio.gpio_bank0,
-            &mut pac.RESETS,
-        );
-    }
+    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    let mut countdown = timer.count_down();
+
+    // The single-cycle I/O block controls our GPIO pins
+    let sio = hal::Sio::new(pac.SIO);
+
+    let pins = rp_pico::Pins::new(
+        pac.IO_BANK0,
+        pac.PADS_BANK0,
+        sio.gpio_bank0,
+        &mut pac.RESETS,
+    );
 
     // Set up the USB driver
+
     let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
         pac.USBCTRL_REGS,
         pac.USBCTRL_DPRAM,
@@ -89,36 +93,25 @@ fn main() -> ! {
     // Enable the temperature sensor
     let mut temperature_sensor = adc.take_temp_sensor().unwrap();
 
-    // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
-
-    // Set the pins up according to their function on this particular board
-    let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
-    
     // Set the LED to be an output
     let mut led_pin = pins.led.into_push_pull_output();
 
-    count_down.start(500.millis());
+    countdown.start(500.millis());
 
     loop {
-
-        if count_down.wait().is_ok() {
+        if countdown.wait().is_ok() {
             led_pin.toggle().unwrap();
             let temperature_adc_counts: u16 = adc.read(&mut temperature_sensor).unwrap();
 
             let measurment = Measurement {
-                millis: 0u32,
+                millis: get_ticks_since_startup(),
                 measurement: temperature_adc_counts,
+                unit: MeasurementUnit::Counts,
                 sensor_id: 0u8,
             };
-            
+
             // Serialize the measurement to a compact binary format using Postcard
-            match pack(&measurment) {
+            match pack::<32>(&measurment) {
                 Ok(serialized) => {
                     // Send the serialized data over USB
                     match serial.write(&serialized) {
@@ -135,7 +128,7 @@ fn main() -> ! {
                 }
             }
 
-            count_down.start(500.millis());
+            countdown.start(500.millis());
         }
 
         // Check for new data
@@ -167,8 +160,20 @@ fn main() -> ! {
                 }
             }
         }
-
     }
 }
 
-// End of file
+// Setup SysTick to trigger an interrupt every 1 ms (125 MHz system clock)
+fn setup_systick(systck: &mut pac::SYST) {
+    const TICKS_PER_MS: u32 = 125_000; // SysTick frequency: 125 MHz / 1000 = 125000 ticks per millisecond
+    systck.set_reload(TICKS_PER_MS - 1); // Set reload to 1ms
+    systck.clear_current(); // Clear current value
+    systck.enable_counter(); // Enable the counter
+                             //systck.enable_interrupt(); // Enable the interrupt (optional)
+}
+
+// Get the number of ticks since startup
+fn get_ticks_since_startup() -> u32 {
+    let systick = unsafe { &*pac::SYST::PTR }; // Access the SysTick register
+    systick.cvr.read() // Read the current value (ticks since startup)
+}

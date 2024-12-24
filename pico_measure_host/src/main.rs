@@ -1,7 +1,19 @@
+use std::fmt;
 use std::time::Duration;
 use std::io::{self, Read};
 
 use pico_measure_transport::{Measurement, unpack};
+
+struct PicoTransErr(pico_measure_transport::Error);
+
+impl fmt::Display for PicoTransErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            pico_measure_transport::Error::InvalidInput(_) => write!(f, "Invalid input"),
+            pico_measure_transport::Error::TooFewBufferElements => write!(f, "Too few buffer elements"),
+        }
+    }
+}
 
 fn main() -> io::Result<()> {
     // Open the USB serial port (change as needed for your OS)
@@ -9,31 +21,37 @@ fn main() -> io::Result<()> {
     let baudrate = 115200;
 
     let mut port = serialport::new(port_name, baudrate)
-        .timeout(Duration::from_millis(100))
+        .timeout(Duration::from_millis(700))
         .open()?;
 
-    let mut buffer: [u8;8] = [0u8; 8];
+    let mut buffer = [0u8; 128];
+    let mut buffer_cursor = 0usize;
 
-    println!("Starting operation?");
+    println!("Initialization complete");
 
     loop {
-
-        // Read bytes from the serial port
-        match port.read_exact(&mut buffer) {
-            Ok(_) => {
-                // Deserialize the data using Postcard
-                match unpack(&buffer) {
-                    Ok(measurement) => {
-                        println!("Received Measurement: {:?}", measurement);
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to deserialize data: {}", e);
-                    }
+        
+        match port.read(&mut buffer[buffer_cursor..]) {
+            Ok(n) => {
+                buffer_cursor += n;
+                if buffer_cursor >= buffer.len() {
+                    buffer_cursor = 0usize;
                 }
-            }
+                println!("was reading {} bytes, we have {}", n, buffer_cursor);
+            },
             Err(e) => {
                 eprintln!("Error reading from serial port: {}", e);
+                continue;
             }
+        }
+
+        match unpack(&buffer[0..buffer_cursor]) {
+            Ok(measurement) => {
+                println!("Received Measurement ({}): {:?}", buffer_cursor, measurement);
+                buffer_cursor = 0;
+            },
+            Err(pico_measure_transport::Error::InvalidInput(_)) => buffer_cursor = 0,
+            _ => {}
         }
     }
 }
