@@ -8,78 +8,110 @@
 #![no_std]
 #![no_main]
 
+use fugit::MillisDurationU32;
 use panic_halt as _;
 
 use rp_pico::entry;
 use rp_pico::hal;
 use rp_pico::hal::clocks::ClocksManager;
+use rp_pico::hal::Adc;
+use rp_pico::hal::Timer;
+use rp_pico::hal::Watchdog;
 use rp_pico::hal::{clocks, pac, usb};
 
 use embedded_hal_0_2::timer::CountDown;
 use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
 
-use fugit::ExtU32;
-
+use fugit::{Duration, ExtU32};
+use rp_pico::Pins;
 // usb related
 use usb_device::{class_prelude::*, prelude::*};
 use usbd_serial::SerialPort;
 
 use pico_measure_transport::{pack, Measurement, MeasurementUnit};
 
+struct Board {
+    core: pac::CorePeripherals,
+    watchdog: Watchdog,
+    pins: Pins,
+    timer: Timer,
+    adc: Adc,
+    usb_bus: UsbBusAllocator<hal::usb::UsbBus>,
+}
+
+impl Board {
+    pub fn take() -> Option<Self> {
+        Some(Self::new(
+            pac::Peripherals::take()?,
+            pac::CorePeripherals::take()?,
+        ))
+    }
+
+    fn new(mut pac: pac::Peripherals, core: pac::CorePeripherals) -> Self {
+        // Set up the watchdog driver - needed by the clock setup code
+        let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
+
+        let clocks = hal::clocks::init_clocks_and_plls(
+            rp_pico::XOSC_CRYSTAL_FREQ,
+            pac.XOSC,
+            pac.CLOCKS,
+            pac.PLL_SYS,
+            pac.PLL_USB,
+            &mut pac.RESETS,
+            &mut watchdog,
+        )
+        .ok()
+        .unwrap();
+
+        let sio = hal::Sio::new(pac.SIO);
+
+        let pins = rp_pico::Pins::new(
+            pac.IO_BANK0,
+            pac.PADS_BANK0,
+            sio.gpio_bank0,
+            &mut pac.RESETS,
+        );
+
+        let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+
+        let mut adc = hal::Adc::new(pac.ADC, &mut pac.RESETS);
+
+        let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
+            pac.USBCTRL_REGS,
+            pac.USBCTRL_DPRAM,
+            clocks.usb_clock,
+            true,
+            &mut pac.RESETS,
+        ));
+
+        Board {
+            core,
+            watchdog,
+            pins,
+            timer,
+            adc,
+            usb_bus,
+        }
+    }
+}
+
 #[entry]
 fn main() -> ! {
-    // Grab our singleton objects
-    let mut pac = pac::Peripherals::take().unwrap();
-    let mut core_peripherals = cortex_m::Peripherals::take().unwrap();
+    let mut board = Board::take().unwrap();
 
-    // Set up the watchdog driver - needed by the clock setup code
-    let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
+    setup_systick(&mut board.core.SYST);
 
-    // Configure the clocks
-    //
-    // The default is to generate a 125 MHz system clock
-    let clocks = hal::clocks::init_clocks_and_plls(
-        rp_pico::XOSC_CRYSTAL_FREQ,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    let mut countdown = board.timer.count_down();
 
-    setup_systick(&mut core_peripherals.SYST);
+    // Enable the temperature sensor
+    let mut temperature_sensor = board.adc.take_temp_sensor().unwrap();
 
-    let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
-    let mut countdown = timer.count_down();
+    // Set the LED to be an output
+    let mut led_pin = board.pins.led.into_push_pull_output();
 
-    // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
+    let mut usb_serial = SerialPort::new(&board.usb_bus);
 
-    let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
-
-    // Set up the USB driver
-
-    let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
-        pac.USBCTRL_REGS,
-        pac.USBCTRL_DPRAM,
-        clocks.usb_clock,
-        true,
-        &mut pac.RESETS,
-    ));
-
-    // Set up the USB Communications Class Device driver
-    let mut serial = SerialPort::new(&usb_bus);
-
-    // Create a USB device with a fake VID and PID
-    let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
+    let mut usb_dev = UsbDeviceBuilder::new(&board.usb_bus, UsbVidPid(0x16c0, 0x27dd))
         .strings(&[StringDescriptors::default()
             .manufacturer("Fake company")
             .product("Serial port")
@@ -88,23 +120,18 @@ fn main() -> ! {
         .device_class(2) // from: https://www.usb.org/defined-class-codes
         .build();
 
-    // Enable adc
-    let mut adc = hal::Adc::new(pac.ADC, &mut pac.RESETS);
-    // Enable the temperature sensor
-    let mut temperature_sensor = adc.take_temp_sensor().unwrap();
-
-    // Set the LED to be an output
-    let mut led_pin = pins.led.into_push_pull_output();
-
     countdown.start(500.millis());
 
     loop {
         if countdown.wait().is_ok() {
+            countdown.start(500.millis());
             led_pin.toggle().unwrap();
-            let temperature_adc_counts: u16 = adc.read(&mut temperature_sensor).unwrap();
+            let temperature_adc_counts: u16 = board.adc.read(&mut temperature_sensor).unwrap();
+
+            let millis = get_ticks_since_startup();
 
             let measurment = Measurement {
-                millis: get_ticks_since_startup(),
+                millis,
                 measurement: temperature_adc_counts,
                 unit: MeasurementUnit::Counts,
                 sensor_id: 0u8,
@@ -114,7 +141,7 @@ fn main() -> ! {
             match pack::<32>(&measurment) {
                 Ok(serialized) => {
                     // Send the serialized data over USB
-                    match serial.write(&serialized) {
+                    match usb_serial.write(&serialized) {
                         Ok(_) => {
                             // Successfully sent the data
                         }
@@ -127,14 +154,12 @@ fn main() -> ! {
                     // Didn't work as well :(
                 }
             }
-
-            countdown.start(500.millis());
         }
 
         // Check for new data
-        if usb_dev.poll(&mut [&mut serial]) {
+        if usb_dev.poll(&mut [&mut usb_serial]) {
             let mut buf = [0u8; 64];
-            match serial.read(&mut buf) {
+            match usb_serial.read(&mut buf) {
                 Err(_e) => {
                     // Do nothing
                 }
@@ -149,7 +174,7 @@ fn main() -> ! {
                     // Send back to the host
                     let mut wr_ptr = &buf[..count];
                     while !wr_ptr.is_empty() {
-                        match serial.write(wr_ptr) {
+                        match usb_serial.write(wr_ptr) {
                             Ok(len) => wr_ptr = &wr_ptr[len..],
                             // On error, just drop unwritten data.
                             // One possible error is Err(WouldBlock), meaning the USB
