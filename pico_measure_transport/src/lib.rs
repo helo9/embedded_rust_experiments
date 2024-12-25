@@ -1,5 +1,5 @@
 #![no_std]
-use core::ops::Deref;
+use core::ops::Deref as _;
 use core::result::Result::{Ok, Err};
 use serde::{Serialize, Deserialize};
 use postcard::{to_slice, from_bytes};
@@ -23,22 +23,26 @@ impl From<postcard::Error> for Error {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub enum MeasurementUnit {
-    Volt,
-    Celsius,
-    Ampere,
-    Counts
+pub enum MeasuredValue {
+    Volt(f32),
+    Celsius(f32),
+    Ampere(f32),
+    Counts(u32)
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct Measurement {
-    pub millis: u32,
-    pub measurement: u16,
-    pub unit: MeasurementUnit,
     pub sensor_id: u8,
+    pub value: MeasuredValue,
 }
 
-pub fn unpack (buffer: &[u8]) -> Result<Measurement, Error>  {
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
+pub struct MeasurementGroup {
+    pub millis: u32,
+    pub measurements: [Option<Measurement>; 8],
+}
+
+pub fn unpack (buffer: &[u8]) -> Result<MeasurementGroup, Error>  {
 
     if buffer.len() < 2 {
         return Err(Error::TooFewBufferElements);
@@ -59,7 +63,7 @@ pub fn unpack (buffer: &[u8]) -> Result<Measurement, Error>  {
     Ok(measurement)
 }
 
-pub fn pack <const N: usize> (measurement: &Measurement) -> Result<Vec<u8,N>, Error> {
+pub fn pack <const N: usize> (measurement: &MeasurementGroup) -> Result<Vec<u8,N>, Error> {
     let mut buffer: [u8; N] = [0; N];
 
     buffer[0] = START_BYTE;
@@ -80,18 +84,23 @@ pub fn pack <const N: usize> (measurement: &Measurement) -> Result<Vec<u8,N>, Er
 
 #[cfg(test)]
 mod tests {
-    use core::{u16, u32, u8};
+    use core::{u32, u8};
 
-    use libc_print::std_name::{println, eprintln, dbg};
+    use libc_print::std_name::println;
 
     use super::*;
 
     #[test]
     fn it_works() {
-        let measurement = Measurement {
+        let measurement = MeasurementGroup {
             millis: u32::MAX,
-            measurement: u16::MAX,
-            sensor_id: u8::MAX
+            measurements: [
+                Some(Measurement{
+                    value: MeasuredValue::Volt(f32::MAX),
+                    sensor_id: u8::MAX
+                }),
+                None, None, None, None, None, None, None
+            ],
         };
 
         let buf = pack::<32>(&measurement).unwrap();

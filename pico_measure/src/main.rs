@@ -8,12 +8,13 @@
 #![no_std]
 #![no_main]
 
-use fugit::MillisDurationU32;
+use cortex_m::interrupt;
+use cortex_m_rt::exception;
 use panic_halt as _;
 
 use rp_pico::entry;
 use rp_pico::hal;
-use rp_pico::hal::clocks::ClocksManager;
+use rp_pico::hal::adc::AdcPin;
 use rp_pico::hal::Adc;
 use rp_pico::hal::Timer;
 use rp_pico::hal::Watchdog;
@@ -22,13 +23,14 @@ use rp_pico::hal::{clocks, pac, usb};
 use embedded_hal_0_2::timer::CountDown;
 use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
 
-use fugit::{Duration, ExtU32};
+use fugit::{MillisDurationU32, ExtU32};
+
 use rp_pico::Pins;
 // usb related
 use usb_device::{class_prelude::*, prelude::*};
 use usbd_serial::SerialPort;
 
-use pico_measure_transport::{pack, Measurement, MeasurementUnit};
+use pico_measure_transport::{pack, Measurement, MeasuredValue, MeasurementGroup};
 
 struct Board {
     core: pac::CorePeripherals,
@@ -47,7 +49,7 @@ impl Board {
         ))
     }
 
-    fn new(mut pac: pac::Peripherals, core: pac::CorePeripherals) -> Self {
+    fn new(mut pac: pac::Peripherals, mut core: pac::CorePeripherals) -> Self {
         // Set up the watchdog driver - needed by the clock setup code
         let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
@@ -62,6 +64,12 @@ impl Board {
         )
         .ok()
         .unwrap();
+
+        const TICKS_PER_MS: u32 = 125_000; // SysTick frequency: 125 MHz / 1000 = 125000 ticks per millisecond
+        core.SYST.set_reload(TICKS_PER_MS - 1); // Set reload to 1ms
+        core.SYST.clear_current(); // Clear current value
+        core.SYST.enable_counter(); // Enable the counter
+        core.SYST.enable_interrupt();
 
         let sio = hal::Sio::new(pac.SIO);
 
@@ -95,16 +103,19 @@ impl Board {
     }
 }
 
+static MILLIS: portable_atomic::AtomicU32 = portable_atomic::AtomicU32::new(0);
+
 #[entry]
 fn main() -> ! {
     let mut board = Board::take().unwrap();
-
-    setup_systick(&mut board.core.SYST);
 
     let mut countdown = board.timer.count_down();
 
     // Enable the temperature sensor
     let mut temperature_sensor = board.adc.take_temp_sensor().unwrap();
+    let mut adc_pin1 = AdcPin::new(board.pins.gpio26.into_floating_input()).unwrap();
+    let mut adc_pin2 = AdcPin::new(board.pins.gpio27.into_floating_input()).unwrap();
+    let mut adc_pin3 = AdcPin::new(board.pins.gpio28.into_floating_input()).unwrap();
 
     // Set the LED to be an output
     let mut led_pin = board.pins.led.into_push_pull_output();
@@ -126,15 +137,37 @@ fn main() -> ! {
         if countdown.wait().is_ok() {
             countdown.start(500.millis());
             led_pin.toggle().unwrap();
-            let temperature_adc_counts: u16 = board.adc.read(&mut temperature_sensor).unwrap();
+            let temperature_adc_counts: u32 = board.adc.read(&mut temperature_sensor).unwrap();
+            let voltage1_counts: u32 = board.adc.read(&mut adc_pin1).unwrap();
+            let voltage2_counts: u32 = board.adc.read(&mut adc_pin2).unwrap();
+            let voltage3_counts: u32 = board.adc.read(&mut adc_pin3).unwrap();
 
-            let millis = get_ticks_since_startup();
+            let millis = MILLIS.load(portable_atomic::Ordering::Relaxed);
 
-            let measurment = Measurement {
+            let measurment = MeasurementGroup {
                 millis,
-                measurement: temperature_adc_counts,
-                unit: MeasurementUnit::Counts,
-                sensor_id: 0u8,
+                measurements: [
+                    Some(Measurement {
+                        value:MeasuredValue::Counts(temperature_adc_counts),
+                        sensor_id: 0u8
+                    }),
+                    Some(Measurement {
+                        value:MeasuredValue::Counts(voltage1_counts),
+                        sensor_id: 26u8
+                    }),
+                    Some(Measurement {
+                        value:MeasuredValue::Counts(voltage2_counts),
+                        sensor_id: 27u8
+                    }),
+                    Some(Measurement {
+                        value:MeasuredValue::Counts(voltage3_counts),
+                        sensor_id: 28u8
+                    }),
+                    None,
+                    None,
+                    None,
+                    None
+                ]
             };
 
             // Serialize the measurement to a compact binary format using Postcard
@@ -188,17 +221,7 @@ fn main() -> ! {
     }
 }
 
-// Setup SysTick to trigger an interrupt every 1 ms (125 MHz system clock)
-fn setup_systick(systck: &mut pac::SYST) {
-    const TICKS_PER_MS: u32 = 125_000; // SysTick frequency: 125 MHz / 1000 = 125000 ticks per millisecond
-    systck.set_reload(TICKS_PER_MS - 1); // Set reload to 1ms
-    systck.clear_current(); // Clear current value
-    systck.enable_counter(); // Enable the counter
-                             //systck.enable_interrupt(); // Enable the interrupt (optional)
-}
-
-// Get the number of ticks since startup
-fn get_ticks_since_startup() -> u32 {
-    let systick = unsafe { &*pac::SYST::PTR }; // Access the SysTick register
-    systick.cvr.read() // Read the current value (ticks since startup)
+#[exception]
+fn SysTick() {
+    MILLIS.add(1, portable_atomic::Ordering::Relaxed);
 }
