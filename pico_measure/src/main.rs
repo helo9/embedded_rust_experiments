@@ -33,8 +33,6 @@ use usbd_serial::SerialPort;
 use pico_measure_transport::{pack, Measurement, MeasuredValue, MeasurementGroup};
 
 struct Board {
-    core: pac::CorePeripherals,
-    watchdog: Watchdog,
     pins: Pins,
     timer: Timer,
     adc: Adc,
@@ -82,7 +80,7 @@ impl Board {
 
         let timer = hal::Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
 
-        let mut adc = hal::Adc::new(pac.ADC, &mut pac.RESETS);
+        let adc = hal::Adc::new(pac.ADC, &mut pac.RESETS);
 
         let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
             pac.USBCTRL_REGS,
@@ -93,8 +91,6 @@ impl Board {
         ));
 
         Board {
-            core,
-            watchdog,
             pins,
             timer,
             adc,
@@ -103,6 +99,7 @@ impl Board {
     }
 }
 
+const FACTOR: f32 = 105.6f32 / 5.6f32 * 3.3f32 / 4096.0f32;
 static MILLIS: portable_atomic::AtomicU32 = portable_atomic::AtomicU32::new(0);
 
 #[entry]
@@ -148,19 +145,19 @@ fn main() -> ! {
                 millis,
                 measurements: [
                     Some(Measurement {
-                        value:MeasuredValue::Counts(temperature_adc_counts),
+                        value:temperature_from_cnts(temperature_adc_counts),
                         sensor_id: 0u8
                     }),
                     Some(Measurement {
-                        value:MeasuredValue::Counts(voltage1_counts),
+                        value:MeasuredValue::Volt(FACTOR * (voltage1_counts as f32)),
                         sensor_id: 26u8
                     }),
                     Some(Measurement {
-                        value:MeasuredValue::Counts(voltage2_counts),
+                        value:MeasuredValue::Volt(FACTOR * (voltage2_counts as f32)),
                         sensor_id: 27u8
                     }),
                     Some(Measurement {
-                        value:MeasuredValue::Counts(voltage3_counts),
+                        value: MeasuredValue::Volt(FACTOR * (voltage3_counts as f32)),
                         sensor_id: 28u8
                     }),
                     None,
@@ -171,7 +168,7 @@ fn main() -> ! {
             };
 
             // Serialize the measurement to a compact binary format using Postcard
-            match pack::<32>(&measurment) {
+            match pack::<128>(&measurment) {
                 Ok(serialized) => {
                     // Send the serialized data over USB
                     match usb_serial.write(&serialized) {
@@ -224,4 +221,13 @@ fn main() -> ! {
 #[exception]
 fn SysTick() {
     MILLIS.add(1, portable_atomic::Ordering::Relaxed);
+}
+
+fn temperature_from_cnts(cnts: u32) -> MeasuredValue {
+    
+    let measured_volts = 3.3 / 4095.0 * (cnts as f32);
+
+    let temperature = 27.0 - ( measured_volts - 0.706) / 0.001721;
+
+    MeasuredValue::Celsius(temperature)
 }
