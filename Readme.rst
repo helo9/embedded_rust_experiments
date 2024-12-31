@@ -3,6 +3,14 @@
 ARM/Raspberry Pico Setup
 ------------------------
 
+Toolchain:
+
+.. code-block:: bash
+
+   rustup self update
+   rustup update stable
+   rustup target add thumbv6m-none-eabi
+
 Dependencies:
 
 .. code-block:: bash
