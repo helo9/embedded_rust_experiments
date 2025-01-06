@@ -64,6 +64,7 @@ impl Board {
         .unwrap();
 
         const TICKS_PER_MS: u32 = 125_000; // SysTick frequency: 125 MHz / 1000 = 125000 ticks per millisecond
+        core.SYST.set_clock_source(cortex_m::peripheral::syst::SystClkSource::Core);
         core.SYST.set_reload(TICKS_PER_MS - 1); // Set reload to 1ms
         core.SYST.clear_current(); // Clear current value
         core.SYST.enable_counter(); // Enable the counter
