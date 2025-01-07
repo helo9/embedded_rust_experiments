@@ -10,12 +10,15 @@
 
 use cortex_m::interrupt;
 use cortex_m_rt::exception;
+use dht_sensor::dht11::Reading;
+use embedded_hal_0_2::digital::v2::OutputPin;
 use panic_halt as _;
 
 use rp_pico::entry;
 use rp_pico::hal;
 use rp_pico::hal::adc::AdcPin;
 use rp_pico::hal::Adc;
+use rp_pico::hal::Clock;
 use rp_pico::hal::Timer;
 use rp_pico::hal::Watchdog;
 use rp_pico::hal::{clocks, pac, usb};
@@ -26,17 +29,26 @@ use embedded_hal_0_2::{adc::OneShot, digital::v2::ToggleableOutputPin};
 use fugit::{MillisDurationU32, ExtU32};
 
 use rp_pico::Pins;
+
 // usb related
+
 use usb_device::{class_prelude::*, prelude::*};
 use usbd_serial::SerialPort;
 
-use pico_measure_transport::{pack, Measurement, MeasuredValue, MeasurementGroup};
+// dht11 humidity sensor
+
+use dht_sensor::{dht11, DhtReading};
+
+// custom data transport
+
+use pico_measure_transport::{pack, Measurement, MeasuredQuantity, MeasurementGroup};
 
 struct Board {
     pins: Pins,
     timer: Timer,
     adc: Adc,
     usb_bus: UsbBusAllocator<hal::usb::UsbBus>,
+    delay: cortex_m::delay::Delay,
 }
 
 impl Board {
@@ -91,11 +103,14 @@ impl Board {
             &mut pac.RESETS,
         ));
 
+        let delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+
         Board {
             pins,
             timer,
             adc,
             usb_bus,
+            delay
         }
     }
 }
@@ -116,7 +131,14 @@ fn main() -> ! {
     let mut adc_pin3 = AdcPin::new(board.pins.gpio28.into_floating_input()).unwrap();
 
     // Set the LED to be an output
+
     let mut led_pin = board.pins.led.into_push_pull_output();
+
+    // DHT sensor
+    let mut dht11_pin: hal::gpio::InOutPin<hal::gpio::Pin<hal::gpio::bank0::Gpio0, hal::gpio::FunctionNull, hal::gpio::PullDown>> = hal::gpio::InOutPin::new(board.pins.gpio0);
+    let _ = dht11_pin.set_high();
+
+    // USB Device setup
 
     let mut usb_serial = SerialPort::new(&board.usb_bus);
 
@@ -142,6 +164,11 @@ fn main() -> ! {
 
             let millis = MILLIS.load(portable_atomic::Ordering::Relaxed);
 
+            let (temp2, rel_humidity) = match dht11::Reading::read(&mut board.delay, &mut dht11_pin) {
+                Ok(r) => (Some(r.temperature), Some(r.relative_humidity)),
+                Err(_) => (None, None)
+            };
+
             let measurment = MeasurementGroup {
                 millis,
                 measurements: [
@@ -150,26 +177,26 @@ fn main() -> ! {
                         sensor_id: 0u8
                     }),
                     Some(Measurement {
-                        value:MeasuredValue::Volt(FACTOR * (voltage1_counts as f32)),
+                        value:MeasuredQuantity::Volt(FACTOR * (voltage1_counts as f32)),
                         sensor_id: 26u8
                     }),
                     Some(Measurement {
-                        value:MeasuredValue::Volt(FACTOR * (voltage2_counts as f32)),
+                        value:MeasuredQuantity::Volt(FACTOR * (voltage2_counts as f32)),
                         sensor_id: 27u8
                     }),
+                    Some(Measurement { value: MeasuredQuantity::Celsius(20f32), sensor_id: 1 }),
                     Some(Measurement {
-                        value: MeasuredValue::Volt(FACTOR * (voltage3_counts as f32)),
+                        value: MeasuredQuantity::Volt(FACTOR * (voltage3_counts as f32)),
                         sensor_id: 28u8
                     }),
-                    None,
-                    None,
-                    None,
+                    temp2.map(|t| Measurement { value: MeasuredQuantity::Celsius(t as f32), sensor_id: 1}),
+                    rel_humidity.map(|rh| Measurement{ value: MeasuredQuantity::RelativeHumidity(rh as u16), sensor_id: 2 }),
                     None
                 ]
             };
 
             // Serialize the measurement to a compact binary format using Postcard
-            match pack::<128>(&measurment) {
+            match pack::<256>(&measurment) {
                 Ok(serialized) => {
                     // Send the serialized data over USB
                     match usb_serial.write(&serialized) {
@@ -224,11 +251,11 @@ fn SysTick() {
     MILLIS.add(1, portable_atomic::Ordering::Relaxed);
 }
 
-fn temperature_from_cnts(cnts: u32) -> MeasuredValue {
+fn temperature_from_cnts(cnts: u32) -> MeasuredQuantity {
     
     let measured_volts = 3.3 / 4095.0 * (cnts as f32);
 
     let temperature = 27.0 - ( measured_volts - 0.706) / 0.001721;
 
-    MeasuredValue::Celsius(temperature)
+    MeasuredQuantity::Celsius(temperature)
 }

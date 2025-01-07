@@ -23,17 +23,18 @@ impl From<postcard::Error> for Error {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub enum MeasuredValue {
+pub enum MeasuredQuantity {
     Volt(f32),
     Celsius(f32),
     Ampere(f32),
-    Counts(u32)
+    Counts(u32),
+    RelativeHumidity(u16)
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct Measurement {
     pub sensor_id: u8,
-    pub value: MeasuredValue,
+    pub value: MeasuredQuantity,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
@@ -96,7 +97,7 @@ mod tests {
             millis: u32::MAX,
             measurements: [
                 Some(Measurement{
-                    value: MeasuredValue::Volt(f32::MAX),
+                    value: MeasuredQuantity::Volt(f32::MAX),
                     sensor_id: u8::MAX
                 }),
                 None, None, None, None, None, None, None

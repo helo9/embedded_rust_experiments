@@ -6,7 +6,7 @@ use std::io::Read;
 use std::thread::sleep;
 use std::time::Duration;
 
-use pico_measure_transport::{unpack, MeasuredValue, Measurement, MeasurementGroup};
+use pico_measure_transport::{unpack, MeasuredQuantity, Measurement, MeasurementGroup};
 
 struct PicoTransErr(pico_measure_transport::Error);
 
@@ -58,7 +58,7 @@ fn record_measurements(
         .timeout(Duration::from_millis(700))
         .open()?;
 
-    let mut buffer = [0u8; 256];
+    let mut buffer = [0u8; 512];
     let mut buffer_cursor = 0usize;
 
     let mut serial_errors = 0u16;
@@ -84,7 +84,8 @@ fn record_measurements(
                     buffer_cursor, measurement
                 );
 
-                write_csv_row(&mut wtr, &measurement)?;
+                // TODO Unequela Lenghts..
+                //write_csv_row(&mut wtr, &measurement)?;
 
                 // reset receive buffer
                 buffer_cursor = 0;
@@ -120,10 +121,11 @@ fn write_csv_row(
 
     for measurement in measurements {
         match measurement.value {
-            MeasuredValue::Volt(v) => writer.write_field(v.to_string())?,
-            MeasuredValue::Ampere(i) => writer.write_field(i.to_string())?,
-            MeasuredValue::Counts(c) => writer.write_field(c.to_string())?,
-            MeasuredValue::Celsius(t) => writer.write_field(t.to_string())?,
+            MeasuredQuantity::Volt(v) => writer.write_field(v.to_string())?,
+            MeasuredQuantity::Ampere(i) => writer.write_field(i.to_string())?,
+            MeasuredQuantity::Counts(c) => writer.write_field(c.to_string())?,
+            MeasuredQuantity::Celsius(t) => writer.write_field(t.to_string())?,
+            MeasuredQuantity::RelativeHumidity(rh) => writer.write_field(rh.to_string())?,
         }
     }
 
