@@ -8,7 +8,7 @@ use bsp::entry;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_hal::{
-    digital::OutputPin,
+    digital::{InputPin, OutputPin},
     spi::{SpiBus, MODE_0},
 };
 use panic_probe as _;
@@ -255,24 +255,30 @@ fn main() -> ! {
     );
 
     let mut led_pin = pins.led.into_push_pull_output();
+    let mut start_button_pin = pins.gpio15.into_pull_down_input();
     let spi_cs_pin = pins.gpio17.into_push_pull_output();
 
     let mut drv8711 = Drv8711::new(spi, spi_cs_pin);
 
-    drv8711.write_defaults().unwrap();
-    drv8711.set_milliamps(5500).unwrap();
-    drv8711.enable().unwrap();
-
-    info!("Stepper driver enabled!");
-
     loop {
-        drv8711.step().unwrap();
-        led_pin.set_high().unwrap();
-        delay.delay_ms(2);
 
-        drv8711.step().unwrap();
-        led_pin.set_low().unwrap();
-        delay.delay_ms(2);
+        if start_button_pin.is_low().unwrap() {
+            continue;
+        }
+
+        drv8711.write_defaults().unwrap();
+        drv8711.set_milliamps(5500).unwrap();
+        drv8711.enable().unwrap();
+
+        info!("Stepper driver enabled!");
+
+        for _ in 1..5 {
+            led_pin.set_high().unwrap();
+            delay.delay_ms(250);
+
+            led_pin.set_low().unwrap();
+            delay.delay_ms(250);
+        }
     }
 }
 
