@@ -41,7 +41,7 @@ use dht_sensor::{dht11, DhtReading};
 
 // custom data transport
 
-use pico_measure_transport::{pack, Measurement, MeasuredQuantity, MeasurementGroup};
+use pico_measure_transport::{pack, Measurement, MeasurementGroup};
 
 struct Board {
     pins: Pins,
@@ -172,25 +172,13 @@ fn main() -> ! {
             let measurment = MeasurementGroup {
                 millis,
                 measurements: [
-                    Some(Measurement {
-                        value:temperature_from_cnts(temperature_adc_counts),
-                        sensor_id: 0u8
-                    }),
-                    Some(Measurement {
-                        value:MeasuredQuantity::Volt(FACTOR * (voltage1_counts as f32)),
-                        sensor_id: 26u8
-                    }),
-                    Some(Measurement {
-                        value:MeasuredQuantity::Volt(FACTOR * (voltage2_counts as f32)),
-                        sensor_id: 27u8
-                    }),
-                    Some(Measurement { value: MeasuredQuantity::Celsius(20f32), sensor_id: 1 }),
-                    Some(Measurement {
-                        value: MeasuredQuantity::Volt(FACTOR * (voltage3_counts as f32)),
-                        sensor_id: 28u8
-                    }),
-                    temp2.map(|t| Measurement { value: MeasuredQuantity::Celsius(t as f32), sensor_id: 1}),
-                    rel_humidity.map(|rh| Measurement{ value: MeasuredQuantity::RelativeHumidity(rh as u16), sensor_id: 2 }),
+                    Some(temperature_from_cnts(temperature_adc_counts)),
+                    Some(Measurement::Volt(FACTOR * (voltage1_counts as f32))),
+                    Some(Measurement::Volt(FACTOR * (voltage2_counts as f32))),
+                    Some(Measurement::Celsius(20f32)),
+                    Some(Measurement::Volt(FACTOR * (voltage3_counts as f32))),
+                    temp2.map(|t| Measurement::Celsius(t as f32)),
+                    rel_humidity.map(|rh| Measurement::RelativeHumidity(rh as u16)),
                     None
                 ]
             };
@@ -251,11 +239,11 @@ fn SysTick() {
     MILLIS.add(1, portable_atomic::Ordering::Relaxed);
 }
 
-fn temperature_from_cnts(cnts: u32) -> MeasuredQuantity {
-    
+fn temperature_from_cnts(cnts: u32) -> Measurement {
+
     let measured_volts = 3.3 / 4095.0 * (cnts as f32);
 
     let temperature = 27.0 - ( measured_volts - 0.706) / 0.001721;
 
-    MeasuredQuantity::Celsius(temperature)
+    Measurement::Celsius(temperature)
 }

@@ -23,18 +23,12 @@ impl From<postcard::Error> for Error {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub enum MeasuredQuantity {
+pub enum Measurement {
     Volt(f32),
     Celsius(f32),
     Ampere(f32),
     Counts(u32),
     RelativeHumidity(u16)
-}
-
-#[derive(Deserialize, Serialize, Debug, PartialEq)]
-pub struct Measurement {
-    pub sensor_id: u8,
-    pub value: MeasuredQuantity,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
@@ -75,7 +69,7 @@ pub fn pack <const N: usize> (measurement: &MeasurementGroup) -> Result<Vec<u8,N
     };
 
     buffer[1] = data_bytes + 2u8;
-    
+
 
     let mut vec = Vec::<u8, N>::new();
     vec.extend_from_slice(&buffer[..=buffer[1] as usize]).unwrap(); // TODO: add error handling

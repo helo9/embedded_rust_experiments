@@ -6,7 +6,11 @@ use std::io::Read;
 use std::thread::sleep;
 use std::time::Duration;
 
-use pico_measure_transport::{unpack, MeasuredQuantity, Measurement, MeasurementGroup};
+use pico_measure_transport::{
+    unpack,
+    Measurement::{Volt, Ampere, Counts, Celsius, RelativeHumidity},
+    MeasurementGroup
+};
 
 struct PicoTransErr(pico_measure_transport::Error);
 
@@ -85,7 +89,7 @@ fn record_measurements(
                 );
 
                 // TODO Unequela Lenghts..
-                //write_csv_row(&mut wtr, &measurement)?;
+                write_csv_row(&mut wtr, &measurement)?;
 
                 // reset receive buffer
                 buffer_cursor = 0;
@@ -113,19 +117,14 @@ fn write_csv_row(
 
     writer.write_field(mgroup.millis.to_string())?;
 
-    let measurements: Vec<&Measurement> = mgroup
-        .measurements
-        .iter()
-        .filter_map(|x| x.as_ref())
-        .collect();
-
-    for measurement in measurements {
-        match measurement.value {
-            MeasuredQuantity::Volt(v) => writer.write_field(v.to_string())?,
-            MeasuredQuantity::Ampere(i) => writer.write_field(i.to_string())?,
-            MeasuredQuantity::Counts(c) => writer.write_field(c.to_string())?,
-            MeasuredQuantity::Celsius(t) => writer.write_field(t.to_string())?,
-            MeasuredQuantity::RelativeHumidity(rh) => writer.write_field(rh.to_string())?,
+    for measurement in &mgroup.measurements {
+        match measurement {
+            Some(Volt(v)) => writer.write_field(v.to_string())?,
+            Some(Ampere(i)) => writer.write_field(i.to_string())?,
+            Some(Counts(c)) => writer.write_field(c.to_string())?,
+            Some(Celsius(t)) => writer.write_field(t.to_string())?,
+            Some(RelativeHumidity(rh)) => writer.write_field(rh.to_string())?,
+            _ => writer.write_field("-")?,
         }
     }
 
